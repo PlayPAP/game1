@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b08ceb78e3b2495b8d808a5860e66794, type: 3}
   m_Name: WallTile
   m_EditorClassIdentifier: Unity.2D.Tilemap.Extras::UnityEngine.Tilemaps.AutoTile
-  m_DefaultSprite: {fileID: -5200877680168399211, guid: 17e33de342b4d2b4a87a3e21aa7d9db7, type: 3}
+  m_DefaultSprite: {fileID: -1219557602013251926, guid: a2d0af07b26ae3a4ab68518a5a09703b, type: 3}
   m_DefaultGameObject: {fileID: 0}
   m_DefaultColliderType: 1
   m_MaskType: 0
