@@ -29,7 +29,7 @@ public class DroppedItem : MonoBehaviour
 
         transform.position += (Vector3)(Random.insideUnitCircle * 0.25f);
 
-        PlayerMovement player = FindFirstObjectByType<PlayerMovement>();
+        PlayerMovement player = FindAnyObjectByType<PlayerMovement>();
         if (player != null)
         {
             playerTransform = player.transform;

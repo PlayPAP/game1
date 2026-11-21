@@ -10,27 +10,54 @@ public class ChunkManager : MonoBehaviour
     [SerializeField] private GameObject chunkPrefab;
     [SerializeField] private GameObject droppedItemPrefab;
 
+    [System.Serializable]
+    public class OreSpawnEntry
+    {
+        public string oreName;
+        public TileBase oreTopTile;          // 광석 윗면 타일 (예: OreCopperTile)
+        public TileBase oreFrontTile;        // 비워두면 아래 색상으로 앞면 광석 타일 자동 생성
+        public Color32 oreSpeckColor = new Color32(218, 145, 72, 255); // 앞면 광석 알갱이 색
+        [Range(0.5f, 0.95f)] public float noiseThreshold = 0.72f;      // 높을수록 희귀함
+        public float noiseOffset = 500f;                               // 광맥별 노이즈 시드 분리값
+        public float minDistanceFromOrigin = 0f;                       // 시작 지점(0,0) 최소 거리
+    }
+
     [Header("Tiles & Mineable Data")]
     [SerializeField] private TileBase groundTile;
     [SerializeField] private TileBase wallTile;
-    [SerializeField] private TileBase oreTile; // 광석 타일 (선택 사항)
+    [SerializeField] private TileBase oreTile;           // 하위 호환용 유지
+    [SerializeField] private TileBase wallFrontTile;
+    [SerializeField] private TileBase oreFrontTile;      // 하위 호환용 유지
+    [SerializeField] private List<OreSpawnEntry> oreEntries = new List<OreSpawnEntry>();
     [SerializeField] private List<TileData> mineableTileList = new List<TileData>();
+
+    [Header("2.5D Core Keeper Style Settings")]
+    [SerializeField] private float wallTopHeightOffset = 0.45f;
+    [SerializeField] private Color groundBaseTint = new Color(0.78f, 0.75f, 0.72f, 1f);
+    [SerializeField] private Color wallTopTint = Color.white;
 
     [Header("World Settings")]
     [SerializeField] private int chunkSize = 16;
-    [SerializeField] private int loadRadius = 1;
+    [SerializeField] private int loadRadius = 2;
     [SerializeField] private float noiseScale = 0.08f;
     [SerializeField] private int seed = 12345;
 
-    private Dictionary<Vector2Int, GameObject> spawnedChunks = new Dictionary<Vector2Int, GameObject>();
-    private Dictionary<Vector2Int, Tilemap> chunkTilemaps = new Dictionary<Vector2Int, Tilemap>();
+    private Tilemap groundLayer;
+    private Tilemap shadowLayer;
+    private Tilemap wallFrontLayer;
+    private Tilemap wallTopLayer;
 
-    // 타일 에셋별 내구도/드롭 정보 조회용 딕셔너리
+    private HashSet<Vector2Int> loadedChunks = new HashSet<Vector2Int>();
     private Dictionary<TileBase, TileData> tileDataLookup = new Dictionary<TileBase, TileData>();
 
-    // 변경된 타일 및 현재 남은 내구도 저장 (월드 절대 좌표 기준)
-    private Dictionary<Vector2Int, TileBase> modifiedTiles = new Dictionary<Vector2Int, TileBase>();
+    private Dictionary<TileBase, TileBase> oreFrontLookup = new Dictionary<TileBase, TileBase>();
+    private Dictionary<Vector2Int, TileBase> modifiedWalls = new Dictionary<Vector2Int, TileBase>();
     private Dictionary<Vector2Int, int> currentTileHealth = new Dictionary<Vector2Int, int>();
+
+    private TileBase runtimeWallFrontTile;
+    private TileBase runtimeOreFrontTile;
+    private TileBase runtimeHardShadowTile;
+    private TileBase runtimeInteriorColliderTile;
 
     private Vector2Int lastPlayerChunk = new Vector2Int(int.MaxValue, int.MaxValue);
 
@@ -43,6 +70,171 @@ public class ChunkManager : MonoBehaviour
                 tileDataLookup.Add(data.tileAsset, data);
             }
         }
+
+        BuildProceduralPixelTiles();
+        InitializeSharedLayers();
+    }
+
+    private void InitializeSharedLayers()
+    {
+        Transform parent = gridParent != null ? gridParent : transform;
+        groundLayer = GetOrCreateLayer(parent, "GroundTilemap", 0, 0.5f, false);
+        groundLayer.color = groundBaseTint; // 바닥 레이어 전체에 한 번만 색상 적용
+
+        shadowLayer = GetOrCreateLayer(parent, "ShadowTilemap", 1, 0.5f, false);
+        wallFrontLayer = GetOrCreateLayer(parent, "WallFrontTilemap", 2, 0.5f, true);
+        wallTopLayer = GetOrCreateLayer(parent, "WallTopTilemap", 5, 0.5f + wallTopHeightOffset, false);
+    }
+
+    private Tilemap GetOrCreateLayer(Transform parent, string layerName, int sortingOrder, float anchorY, bool withCollider)
+    {
+        Transform tr = parent.Find(layerName);
+        GameObject go = tr != null ? tr.gameObject : new GameObject(layerName);
+        if (tr == null) go.transform.SetParent(parent, false);
+        go.transform.localPosition = Vector3.zero;
+
+        Tilemap tm = go.GetComponent<Tilemap>();
+        if (tm == null) tm = go.AddComponent<Tilemap>();
+        tm.tileAnchor = new Vector3(0.5f, anchorY, 0f);
+
+        TilemapRenderer tmr = go.GetComponent<TilemapRenderer>();
+        if (tmr == null) tmr = go.AddComponent<TilemapRenderer>();
+        tmr.sortingOrder = sortingOrder;
+        tmr.mode = (sortingOrder == 0 || sortingOrder == 5)
+            ? TilemapRenderer.Mode.Individual
+            : TilemapRenderer.Mode.Chunk;
+
+        if (withCollider)
+        {
+            Rigidbody2D rb = go.GetComponent<Rigidbody2D>();
+            if (rb == null) rb = go.AddComponent<Rigidbody2D>();
+            rb.bodyType = RigidbodyType2D.Static;
+
+            TilemapCollider2D tmc = go.GetComponent<TilemapCollider2D>();
+            if (tmc == null) tmc = go.AddComponent<TilemapCollider2D>();
+            tmc.compositeOperation = Collider2D.CompositeOperation.Merge;
+
+            CompositeCollider2D cc = go.GetComponent<CompositeCollider2D>();
+            if (cc == null) cc = go.AddComponent<CompositeCollider2D>();
+            cc.geometryType = CompositeCollider2D.GeometryType.Outlines;
+            cc.edgeRadius = 0.02f;
+        }
+
+        return tm;
+    }
+
+    private void BuildProceduralPixelTiles()
+    {
+        runtimeHardShadowTile = CreateHardEdgeShadowTile(3);
+        runtimeInteriorColliderTile = CreateInvisibleColliderTile();
+
+        runtimeWallFrontTile = wallFrontTile != null
+            ? wallFrontTile
+            : CreateStratifiedFrontTile(
+                new Color32(118, 122, 130, 255),
+                new Color32(88, 92, 100, 255),
+                new Color32(64, 67, 74, 255),
+                new Color32(28, 30, 35, 255),
+                false,
+                default
+            );
+
+        runtimeOreFrontTile = oreFrontTile != null
+            ? oreFrontTile
+            : CreateStratifiedFrontTile(
+                new Color32(124, 118, 112, 255),
+                new Color32(92, 86, 82, 255),
+                new Color32(66, 62, 60, 255),
+                new Color32(28, 26, 28, 255),
+                true,
+                new Color32(218, 145, 72, 255)
+            );
+
+        oreFrontLookup.Clear();
+        foreach (OreSpawnEntry entry in oreEntries)
+        {
+            if (entry.oreTopTile == null || oreFrontLookup.ContainsKey(entry.oreTopTile)) continue;
+
+            TileBase front = entry.oreFrontTile != null
+                ? entry.oreFrontTile
+                : CreateStratifiedFrontTile(
+                    new Color32(124, 118, 112, 255),
+                    new Color32(92, 86, 82, 255),
+                    new Color32(66, 62, 60, 255),
+                    new Color32(28, 26, 28, 255),
+                    true,
+                    entry.oreSpeckColor
+                );
+
+            oreFrontLookup.Add(entry.oreTopTile, front);
+        }
+    }
+
+    private Tile CreateInvisibleColliderTile()
+    {
+        Texture2D tex = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        tex.SetPixels32(new Color32[16 * 16]);
+        tex.Apply();
+
+        Sprite sprite = Sprite.Create(tex, new Rect(0, 0, 16, 16), new Vector2(0.5f, 0.5f), 16f);
+        Tile tile = ScriptableObject.CreateInstance<Tile>();
+        tile.sprite = sprite;
+        tile.colliderType = Tile.ColliderType.Grid;
+        return tile;
+    }
+
+    private Tile CreateHardEdgeShadowTile(int shadowPixelHeight)
+    {
+        Texture2D tex = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        tex.wrapMode = TextureWrapMode.Clamp;
+
+        Color32 clear = new Color32(0, 0, 0, 0);
+        Color32 shadow = new Color32(16, 14, 22, 175);
+
+        for (int y = 0; y < 16; y++)
+        {
+            bool isShadowRow = y >= (16 - shadowPixelHeight);
+            for (int x = 0; x < 16; x++)
+            {
+                tex.SetPixel(x, y, isShadowRow ? shadow : clear);
+            }
+        }
+        tex.Apply();
+
+        Sprite sprite = Sprite.Create(tex, new Rect(0, 0, 16, 16), new Vector2(0.5f, 0.5f), 16f);
+        Tile tile = ScriptableObject.CreateInstance<Tile>();
+        tile.sprite = sprite;
+        tile.colliderType = Tile.ColliderType.None;
+        return tile;
+    }
+
+    private Tile CreateStratifiedFrontTile(Color32 cLight, Color32 cMid, Color32 cDark, Color32 cOutline, bool hasOreSpecks, Color32 cOre)
+    {
+        Texture2D tex = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        tex.wrapMode = TextureWrapMode.Clamp;
+
+        for (int y = 0; y < 16; y++)
+        {
+            for (int x = 0; x < 16; x++)
+            {
+                if (y == 0) tex.SetPixel(x, y, cOutline);
+                else if (y == 7) tex.SetPixel(x, y, cLight);
+                else if (y == 4 && (x % 5 != 0)) tex.SetPixel(x, y, cDark);
+                else if (hasOreSpecks && ((x == 4 && y == 3) || (x == 5 && y == 3) || (x == 11 && y == 5) || (x == 12 && y == 5)))
+                    tex.SetPixel(x, y, cOre);
+                else tex.SetPixel(x, y, ((x + y * 3) % 7 == 0) ? cDark : cMid);
+            }
+        }
+        tex.Apply();
+
+        Sprite sprite = Sprite.Create(tex, new Rect(0, 0, 16, 16), new Vector2(0.5f, 0.5f), 16f);
+        Tile tile = ScriptableObject.CreateInstance<Tile>();
+        tile.sprite = sprite;
+        tile.colliderType = Tile.ColliderType.Grid;
+        return tile;
     }
 
     private void Update()
@@ -76,111 +268,205 @@ public class ChunkManager : MonoBehaviour
                 Vector2Int coord = new Vector2Int(centerChunk.x + x, centerChunk.y + y);
                 neededChunks.Add(coord);
 
-                if (!spawnedChunks.ContainsKey(coord))
+                if (!loadedChunks.Contains(coord))
                 {
-                    CreateChunk(coord);
-                }
-                else if (!spawnedChunks[coord].activeSelf)
-                {
-                    spawnedChunks[coord].SetActive(true);
+                    LoadChunk(coord);
                 }
             }
         }
 
-        foreach (var pair in spawnedChunks)
+        List<Vector2Int> toUnload = new List<Vector2Int>();
+        foreach (Vector2Int coord in loadedChunks)
         {
-            if (!neededChunks.Contains(pair.Key) && pair.Value.activeSelf)
+            if (!neededChunks.Contains(coord))
             {
-                pair.Value.SetActive(false);
+                toUnload.Add(coord);
             }
+        }
+
+        foreach (Vector2Int coord in toUnload)
+        {
+            UnloadChunk(coord);
         }
     }
 
-    private void CreateChunk(Vector2Int chunkCoord)
+    private void LoadChunk(Vector2Int chunkCoord)
     {
-        Vector3 worldPosition = new Vector3(chunkCoord.x * chunkSize, chunkCoord.y * chunkSize, 0f);
-        GameObject chunkObj = Instantiate(chunkPrefab, worldPosition, Quaternion.identity, gridParent);
-        chunkObj.name = $"Chunk_{chunkCoord.x}_{chunkCoord.y}";
+        int startX = chunkCoord.x * chunkSize;
+        int startY = chunkCoord.y * chunkSize;
+        BoundsInt bounds = new BoundsInt(startX, startY, 0, chunkSize, chunkSize, 1);
+        int total = chunkSize * chunkSize;
 
-        Tilemap tilemap = chunkObj.GetComponent<Tilemap>();
-        GenerateTerrain(tilemap, chunkCoord);
-
-        spawnedChunks.Add(chunkCoord, chunkObj);
-        chunkTilemaps.Add(chunkCoord, tilemap);
-    }
-
-    private void GenerateTerrain(Tilemap tilemap, Vector2Int chunkCoord)
-    {
-        BoundsInt bounds = new BoundsInt(0, 0, 0, chunkSize, chunkSize, 1);
-        TileBase[] tiles = new TileBase[chunkSize * chunkSize];
+        TileBase[] groundTiles = new TileBase[total];
+        TileBase[] shadowTiles = new TileBase[total];
+        TileBase[] frontTiles = new TileBase[total];
+        TileBase[] topTiles = new TileBase[total];
 
         for (int y = 0; y < chunkSize; y++)
         {
             for (int x = 0; x < chunkSize; x++)
             {
-                int globalX = chunkCoord.x * chunkSize + x;
-                int globalY = chunkCoord.y * chunkSize + y;
+                int idx = y * chunkSize + x;
+                int globalX = startX + x;
+                int globalY = startY + y;
                 Vector2Int globalPos = new Vector2Int(globalX, globalY);
 
-                // 1순위: 이미 채광되거나 수정된 타일
-                if (modifiedTiles.TryGetValue(globalPos, out TileBase savedTile))
+                groundTiles[idx] = groundTile;
+
+                TileBase currentWall = null;
+                if (modifiedWalls.TryGetValue(globalPos, out TileBase savedWall))
                 {
-                    tiles[y * chunkSize + x] = savedTile;
-                    continue;
+                    currentWall = savedWall;
+                }
+                else if (IsWallAt(globalX, globalY))
+                {
+                    currentWall = GetDefaultWallTileAt(globalX, globalY);
                 }
 
-                // 2순위: 시작 지점 안전 구역
-                if (Mathf.Abs(globalX) <= 2 && Mathf.Abs(globalY) <= 2)
-                {
-                    tiles[y * chunkSize + x] = groundTile;
-                    continue;
-                }
+                topTiles[idx] = currentWall;
 
-                // 3순위: 노이즈 기반 벽 및 광맥 생성
-                float wallNoise = Mathf.PerlinNoise((globalX + seed) * noiseScale, (globalY + seed) * noiseScale);
-                if (wallNoise > 0.45f)
+                if (currentWall != null)
                 {
-                    // 시드 오프셋을 준 별도 노이즈로 광석 분포 결정
-                    float oreNoise = Mathf.PerlinNoise((globalX + seed + 500) * 0.15f, (globalY + seed + 500) * 0.15f);
-                    if (oreTile != null && oreNoise > 0.72f)
+                    if (!IsWallAt(globalX, globalY - 1))
                     {
-                        tiles[y * chunkSize + x] = oreTile;
+                        frontTiles[idx] = (currentWall == oreTile) ? runtimeOreFrontTile : runtimeWallFrontTile;
                     }
                     else
                     {
-                        tiles[y * chunkSize + x] = wallTile;
+                        frontTiles[idx] = runtimeInteriorColliderTile;
                     }
                 }
-                else
+                else if (IsWallAt(globalX, globalY + 1))
                 {
-                    tiles[y * chunkSize + x] = groundTile;
+                    shadowTiles[idx] = runtimeHardShadowTile;
                 }
             }
         }
 
-        tilemap.SetTilesBlock(bounds, tiles);
+        groundLayer.SetTilesBlock(bounds, groundTiles);
+        shadowLayer.SetTilesBlock(bounds, shadowTiles);
+        wallFrontLayer.SetTilesBlock(bounds, frontTiles);
+        wallTopLayer.SetTilesBlock(bounds, topTiles);
+
+        for (int y = 0; y < chunkSize; y++)
+        {
+            for (int x = 0; x < chunkSize; x++)
+            {
+                if (topTiles[y * chunkSize + x] != null)
+                {
+                    Vector3Int cellPos = new Vector3Int(startX + x, startY + y, 0);
+                    wallTopLayer.SetTileFlags(cellPos, TileFlags.None);
+                    wallTopLayer.SetColor(cellPos, wallTopTint);
+                }
+            }
+        }
+
+        loadedChunks.Add(chunkCoord);
+        RefreshChunkBorderRules(chunkCoord);
     }
 
-    // 타일에 대미지를 입히고 파괴 시 아이템을 드롭하는 메서드
-    public bool DamageTile(Vector2Int globalTilePos, int damage)
+    private void UnloadChunk(Vector2Int chunkCoord)
     {
-        Vector2Int chunkCoord = new Vector2Int(
-            Mathf.FloorToInt((float)globalTilePos.x / chunkSize),
-            Mathf.FloorToInt((float)globalTilePos.y / chunkSize)
-        );
+        int startX = chunkCoord.x * chunkSize;
+        int startY = chunkCoord.y * chunkSize;
+        BoundsInt bounds = new BoundsInt(startX, startY, 0, chunkSize, chunkSize, 1);
+        TileBase[] emptyTiles = new TileBase[chunkSize * chunkSize];
 
-        if (!chunkTilemaps.TryGetValue(chunkCoord, out Tilemap targetTilemap))
+        groundLayer.SetTilesBlock(bounds, emptyTiles);
+        shadowLayer.SetTilesBlock(bounds, emptyTiles);
+        wallFrontLayer.SetTilesBlock(bounds, emptyTiles);
+        wallTopLayer.SetTilesBlock(bounds, emptyTiles);
+
+        loadedChunks.Remove(chunkCoord);
+    }
+
+    // 인접 청크와 맞닿는 1칸 테두리의 RuleTile 연결을 즉시 갱신
+    private void RefreshChunkBorderRules(Vector2Int chunkCoord)
+    {
+        int startX = chunkCoord.x * chunkSize;
+        int startY = chunkCoord.y * chunkSize;
+
+        for (int i = -1; i <= chunkSize; i++)
+        {
+            wallTopLayer.RefreshTile(new Vector3Int(startX + i, startY - 1, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX + i, startY, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX + i, startY + chunkSize - 1, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX + i, startY + chunkSize, 0));
+
+            wallTopLayer.RefreshTile(new Vector3Int(startX - 1, startY + i, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX, startY + i, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX + chunkSize - 1, startY + i, 0));
+            wallTopLayer.RefreshTile(new Vector3Int(startX + chunkSize, startY + i, 0));
+        }
+    }
+
+    private bool IsWallAt(int globalX, int globalY)
+    {
+        Vector2Int pos = new Vector2Int(globalX, globalY);
+        if (modifiedWalls.TryGetValue(pos, out TileBase saved))
+            return saved != null;
+
+        if (Mathf.Abs(globalX) <= 2 && Mathf.Abs(globalY) <= 2)
             return false;
 
-        int localX = globalTilePos.x - (chunkCoord.x * chunkSize);
-        int localY = globalTilePos.y - (chunkCoord.y * chunkSize);
-        Vector3Int localPos = new Vector3Int(localX, localY, 0);
+        float wallNoise = Mathf.PerlinNoise((globalX + seed) * noiseScale, (globalY + seed) * noiseScale);
+        return wallNoise > 0.45f;
+    }
 
-        TileBase currentTile = targetTilemap.GetTile(localPos);
+    private TileBase GetFrontTileForWall(TileBase topTile)
+    {
+        if (topTile != null && oreFrontLookup.TryGetValue(topTile, out TileBase customOreFront))
+            return customOreFront;
+
+        return (topTile == oreTile && oreTile != null) ? runtimeOreFrontTile : runtimeWallFrontTile;
+    }
+
+    private TileBase GetDefaultWallTileAt(int globalX, int globalY)
+    {
+        if (oreEntries != null && oreEntries.Count > 0)
+        {
+            float distFromOrigin = Mathf.Sqrt(globalX * globalX + globalY * globalY);
+
+            // 리스트 아래쪽(희귀 광석)부터 먼저 검사
+            for (int i = oreEntries.Count - 1; i >= 0; i--)
+            {
+                OreSpawnEntry entry = oreEntries[i];
+                if (entry.oreTopTile == null || distFromOrigin < entry.minDistanceFromOrigin) continue;
+
+                float oreNoise = Mathf.PerlinNoise(
+                    (globalX + seed + entry.noiseOffset) * 0.15f,
+                    (globalY + seed + entry.noiseOffset) * 0.15f
+                );
+
+                if (oreNoise > entry.noiseThreshold)
+                {
+                    return entry.oreTopTile;
+                }
+            }
+            return wallTile;
+        }
+
+        float fallbackNoise = Mathf.PerlinNoise((globalX + seed + 500) * 0.15f, (globalY + seed + 500) * 0.15f);
+        return (oreTile != null && fallbackNoise > 0.72f) ? oreTile : wallTile;
+    }
+
+    public bool HasMineableTile(Vector2Int globalTilePos)
+    {
+        Vector3Int cellPos = new Vector3Int(globalTilePos.x, globalTilePos.y, 0);
+        TileBase tile = wallTopLayer.GetTile(cellPos);
+        return tile != null && tileDataLookup.ContainsKey(tile);
+    }
+
+    public bool DamageTile(Vector2Int globalTilePos, int damage)
+    {
+        Vector3Int cellPos = new Vector3Int(globalTilePos.x, globalTilePos.y, 0);
+        TileBase currentTile = wallTopLayer.GetTile(cellPos);
         if (currentTile == null || !tileDataLookup.TryGetValue(currentTile, out TileData data))
-            return false; // 채광 불가능한 타일(바닥 등)
+            return false;
 
-        // 현재 남은 체력 조회 (처음 때리는 타일이면 maxHealth로 초기화)
+        if (damage < data.requiredMiningPower)
+            return false;
+
         if (!currentTileHealth.TryGetValue(globalTilePos, out int hp))
         {
             hp = data.maxHealth;
@@ -190,26 +476,77 @@ public class ChunkManager : MonoBehaviour
 
         if (hp > 0)
         {
-            // 아직 부서지지 않음 -> 체력 갱신 및 타일 색상을 어둡게 변경해 타격 피드백 제공
             currentTileHealth[globalTilePos] = hp;
-            float healthRatio = (float)hp / data.maxHealth;
-            targetTilemap.SetTileFlags(localPos, TileFlags.None);
-            targetTilemap.SetColor(localPos, Color.Lerp(new Color(0.45f, 0.45f, 0.45f), Color.white, healthRatio));
+            float ratio = (float)hp / data.maxHealth;
+
+            wallTopLayer.SetTileFlags(cellPos, TileFlags.None);
+            wallTopLayer.SetColor(cellPos, Color.Lerp(wallTopTint * 0.45f, wallTopTint, ratio));
+
+            wallFrontLayer.SetTileFlags(cellPos, TileFlags.None);
+            wallFrontLayer.SetColor(cellPos, Color.Lerp(Color.gray, Color.white, ratio));
         }
         else
         {
-            // 내구도 0 이하 -> 타일 파괴 및 색상 초기화
             currentTileHealth.Remove(globalTilePos);
-            targetTilemap.SetTileFlags(localPos, TileFlags.None);
-            targetTilemap.SetColor(localPos, Color.white);
-            targetTilemap.SetTile(localPos, groundTile);
-            modifiedTiles[globalTilePos] = groundTile;
+            modifiedWalls[globalTilePos] = null;
 
-            // 광물/자원 아이템 드롭
+            wallTopLayer.SetTileFlags(cellPos, TileFlags.None);
+            wallTopLayer.SetColor(cellPos, wallTopTint);
+            wallTopLayer.SetTile(cellPos, null);
+
+            wallFrontLayer.SetTileFlags(cellPos, TileFlags.None);
+            wallFrontLayer.SetColor(cellPos, Color.white);
+            wallFrontLayer.SetTile(cellPos, null);
+
+            if (wallFrontLayer.TryGetComponent(out CompositeCollider2D composite))
+            {
+                composite.GenerateGeometry();
+            }
+
             SpawnDroppedItem(globalTilePos, data);
+
+            RefreshWallVisualsAt(globalTilePos + Vector2Int.up);
+            RefreshWallVisualsAt(globalTilePos);
+            RefreshWallVisualsAt(globalTilePos + Vector2Int.down);
+
+            // 부서진 칸 주변 3x3 RuleTile 테두리 즉시 재계산
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    wallTopLayer.RefreshTile(new Vector3Int(globalTilePos.x + dx, globalTilePos.y + dy, 0));
+                }
+            }
         }
 
         return true;
+    }
+
+    private void RefreshWallVisualsAt(Vector2Int globalPos)
+    {
+        Vector3Int cellPos = new Vector3Int(globalPos.x, globalPos.y, 0);
+        TileBase top = wallTopLayer.GetTile(cellPos);
+
+        if (top != null)
+        {
+            bool exposedSouth = !IsWallAt(globalPos.x, globalPos.y - 1);
+            TileBase front = exposedSouth
+                ? (top == oreTile ? runtimeOreFrontTile : runtimeWallFrontTile)
+                : runtimeInteriorColliderTile;
+            wallFrontLayer.SetTile(cellPos, front);
+            shadowLayer.SetTile(cellPos, null);
+        }
+        else
+        {
+            wallFrontLayer.SetTile(cellPos, null);
+            bool hasNorthWall = IsWallAt(globalPos.x, globalPos.y + 1);
+            shadowLayer.SetTile(cellPos, hasNorthWall ? runtimeHardShadowTile : null);
+        }
+
+        if (wallFrontLayer.TryGetComponent(out CompositeCollider2D composite))
+        {
+            composite.GenerateGeometry();
+        }
     }
 
     private void SpawnDroppedItem(Vector2Int globalTilePos, TileData data)

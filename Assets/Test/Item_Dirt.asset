@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: Item_Dirt
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: "\uC0C8 \uC544\uC774\uD15C"
-  icon: {fileID: -6322739040362837980, guid: f231db56919d4d54aa6cb5537acccf56, type: 3}
+  icon: {fileID: -6322739040362837980, guid: 469d8e67e2bf0fb47bdc6e4766305c4f, type: 3}
   itemType: 0
   isStackable: 1
   maxStack: 99

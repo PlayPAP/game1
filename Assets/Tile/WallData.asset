@@ -1,0 +1,19 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: eb7437a2cae938c4e8e7640228b29f6d, type: 3}
+  m_Name: WallData
+  m_EditorClassIdentifier: Assembly-CSharp::TileData
+  tileAsset: {fileID: 11400000, guid: 0823ad952ca0c21439c1def5db8deb92, type: 2}
+  maxHealth: 10
+  requiredMiningPower: 1
+  dropItem: {fileID: 11400000, guid: f344a68f394e96a4a828fe96720acdb4, type: 2}
+  dropAmount: 1

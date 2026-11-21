@@ -17,4 +17,4 @@ MonoBehaviour:
   itemType: 1
   isStackable: 0
   maxStack: 99
-  miningPower: 2
+  miningPower: 4

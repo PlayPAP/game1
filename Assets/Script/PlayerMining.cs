@@ -7,8 +7,8 @@ public class PlayerMining : MonoBehaviour
 
     [Header("Mining Settings")]
     [SerializeField] private float miningRange = 2.5f;
-    [SerializeField] private int miningPower = 1;       // 한 번 타격당 입히는 대미지
-    [SerializeField] private float mineInterval = 0.3f; // 연속 채광 간격(초)
+    [SerializeField] private int miningPower = 1;
+    [SerializeField] private float mineInterval = 0.3f;
 
     private Camera mainCamera;
     private float nextMineTime;
@@ -20,7 +20,6 @@ public class PlayerMining : MonoBehaviour
 
     private void Update()
     {
-        // 마우스 좌클릭 유지 시 쿨타임마다 채광 시도
         if (Input.GetMouseButton(0) && Time.time >= nextMineTime)
         {
             if (AttemptMineAtMouse())
@@ -29,6 +28,7 @@ public class PlayerMining : MonoBehaviour
             }
         }
     }
+
     private bool AttemptMineAtMouse()
     {
         if (chunkManager == null || mainCamera == null) return false;
@@ -42,13 +42,21 @@ public class PlayerMining : MonoBehaviour
             Mathf.FloorToInt(mouseWorldPos.y)
         );
 
-        Vector2 tileCenter = new Vector2(targetTilePos.x + 0.5f, targetTilePos.y + 0.5f);
-        if (Vector2.Distance(transform.position, tileCenter) > miningRange)
+        // 위로 0.45칸 돌출된 벽 윗면을 클릭한 경우 아래 칸의 벽으로 보정
+        if (!chunkManager.HasMineableTile(targetTilePos))
         {
-            return false;
+            Vector2Int belowPos = new Vector2Int(targetTilePos.x, Mathf.FloorToInt(mouseWorldPos.y - 0.45f));
+            if (chunkManager.HasMineableTile(belowPos))
+            {
+                targetTilePos = belowPos;
+            }
         }
 
-        int currentPower = miningPower; // 기본 맨손 채광력
+        Vector2 tileCenter = new Vector2(targetTilePos.x + 0.5f, targetTilePos.y + 0.5f);
+        if (Vector2.Distance(transform.position, tileCenter) > miningRange)
+            return false;
+
+        int currentPower = miningPower;
         if (InventoryManager.Instance != null)
         {
             ItemData equipped = InventoryManager.Instance.GetSelectedItem();
